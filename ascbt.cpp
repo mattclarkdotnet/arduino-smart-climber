@@ -78,7 +78,7 @@ BLECharacteristic fitnessMachineControlPointCharacteristic("2AD9", BLEWrite | BL
 BLECharacteristic fitnessMachineStatusCharacteristic("2ADA", BLENotify, 2);                                 // Fitness Machine Status, mandatory, notify
 
 // Buffers used to write to the characteristics and initial values
-unsigned char ftmfBuffer[4] = {0b10001001, 0b00000000, 0b00000010, 0b00000000}; // FM Features: 3 (Inclination), plus 0 (Avrage speed, to placate zwift).  FM Target setting features: 1 (Inclination)
+unsigned char ftmfBuffer[4] = {0b10001001, 0b01000000, 0b00000010, 0b00000000}; // FM Features: 3 (Inclination), plus 0 (Average speed) and 7 (power), to placate zwift.  FM Target setting features: 1 (Inclination)
 unsigned char ibdBuffer[8] = {0, 0, 0, 0, 0, 0, 0, 0};                          // Needs to be large enough to accomodate all data we might send - in practice we only send power in debug mode
 unsigned char sirBuffer[6] = {0x9C, 0xFF, 0xC8, 0x00, 0x0A, 0x00};              // Supported Inclination Range - Min, Max, Min increment (sint16, sint16, uint16) units are 0.1%, so 100=10%
 unsigned char ftmsBuffer[2] = {0, 0};
@@ -124,6 +124,13 @@ float getTargetInclinationPercent()
  */
 void handleControlPoint()
 {
+    // If the time of the last event hasn't changed, we've already handled this event
+    if (previousControlPointEvent == lastControlPointEvent)
+    {
+        return;
+    }
+    // Record that we've handed this event
+    previousControlPointEvent = lastControlPointEvent;
     if (serial_debug_bt && Serial)
     {
         Serial.print("Control point received, opcode: 0x");
@@ -220,7 +227,7 @@ void handleControlPoint()
 void writeIndoorBikeDataCharacteristic()
 {
 
-    ibdBuffer[0] = 0x01 | flagInstantaneousPower; // bit 0 = 1 (instantaneous speed not present), bit 6 = 1: instantaneous cadence present
+    ibdBuffer[0] = 0x01 | flagInstantaneousPower; // bit 0 = 1 (instantaneous speed not present)
     ibdBuffer[1] = 0x00;                          // unused
     ibdBuffer[2] = 0x00;                          // first characteristic low byte
     ibdBuffer[3] = 0x00;                          // first characteristic high byte
@@ -229,12 +236,9 @@ void writeIndoorBikeDataCharacteristic()
     ibdBuffer[6] = 0x00;
     ibdBuffer[7] = 0x00;
 
-    if (emulated_power > 0)
-    {
-        ibdBuffer[2] = (int)round(emulated_power) & 0xFF; // Instantaneous Power, uint16
-        ibdBuffer[3] = ((int)round(emulated_power) >> 8) & 0xFF;
-        indoorBikeDataCharacteristic.writeValue(ibdBuffer, 8);
-    }
+    ibdBuffer[2] = (int)round(emulated_power) & 0xFF; // Instantaneous Power, uint16
+    ibdBuffer[3] = ((int)round(emulated_power) >> 8) & 0xFF;
+    indoorBikeDataCharacteristic.writeValue(ibdBuffer, 8);
 }
 
 /**
@@ -279,15 +283,6 @@ void fitnessMachineControlPointCharacteristicWritten(BLEDevice central, BLEChara
     memset(fmcpData.bytes, 0, sizeof(fmcpData.bytes));
     fitnessMachineControlPointCharacteristic.readValue(fmcpData.bytes, fmcpValueLength);
     lastControlPointEvent = millis();
-}
-
-boolean freshEvent()
-{
-    if (previousControlPointEvent != lastControlPointEvent)
-    {
-        previousControlPointEvent = lastControlPointEvent;
-        return true;
-    }
 }
 
 /**

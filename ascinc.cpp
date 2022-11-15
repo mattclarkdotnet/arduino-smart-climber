@@ -4,7 +4,7 @@
 
 #include "ascinc.h"
 
-#define HISTORY_LENGTH 100 // how many accelerometer data points we'll keep in history
+#define HISTORY_LENGTH 25 // how many accelerometer data points we'll keep in history
 boolean serial_debug_inc = false;
 
 // globals for keeping track of inclination of the device

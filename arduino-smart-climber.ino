@@ -112,6 +112,27 @@ void setup()
   }
 }
 
+void moveUp(colours_t colour)
+{
+  setLEDto(colour);
+  digitalWrite(A6, LOW);
+  digitalWrite(A7, HIGH);
+}
+
+void moveDown(colours_t colour)
+{
+  setLEDto(colour);
+  digitalWrite(A6, HIGH);
+  digitalWrite(A7, LOW);
+}
+
+void moveStop(colours_t colour)
+{
+  setLEDto(colour);
+  digitalWrite(A6, LOW);
+  digitalWrite(A7, LOW);
+}
+
 /**
  * Arduino loop, runs continuously
  *
@@ -121,6 +142,20 @@ void loop()
 {
   delay(10);                  // Really no point in doing everything more than 100 times per second
   updateInclinationHistory(); // keep track of inclination all the time
+  // Always be alive so we stay connected
+  BLE.poll();
+  central = BLE.central();
+  if (central && central.connected())
+  {
+    current_millis = millis();
+    if (current_millis > previous_notification + NOTIFICATION_INTERVAL)
+    { // only send a notification every NOTIFICATION_INTERVAL milliseconds
+      writeIndoorBikeDataCharacteristic();
+      previous_notification = millis();
+    }
+  }
+  handleControlPoint();
+
   switch (sm_state)
   {
   case SM_STATE_ERROR:
@@ -142,8 +177,7 @@ void loop()
     if (digitalRead(D2) == HIGH)
     {
       // User has pressed the levelling button. Stop all motion, record the reference inclination and move on to the next state
-      digitalWrite(A6, LOW);
-      digitalWrite(A7, LOW);
+      moveStop(WHITE);
       reference_inclination_percent = getCurrentInclinationPercent(); // set the reference inclination to the current inclination
       sm_state = SM_STATE_RUNNING;
       while (digitalRead(D2) == HIGH)
@@ -164,21 +198,15 @@ void loop()
       // TODO: some risk of debounce issues but will save that for later
       if (digitalRead(D3) == HIGH)
       {
-        setLEDto(GREEN);
-        digitalWrite(A6, HIGH);
-        digitalWrite(A7, LOW);
+        moveDown(GREEN);
       }
       else if (digitalRead(D4) == HIGH)
       {
-        setLEDto(RED);
-        digitalWrite(A6, LOW);
-        digitalWrite(A7, HIGH);
+        moveUp(RED);
       }
       else
       {
-        setLEDto(WHITE);
-        digitalWrite(A6, LOW);
-        digitalWrite(A7, LOW);
+        moveStop(WHITE);
       }
     }
     break;
@@ -189,8 +217,7 @@ void loop()
     if (digitalRead(D2) == HIGH)
     {
       // User has pressed the levelling button durring normal operation, return to levelling mode
-      digitalWrite(A6, LOW);
-      digitalWrite(A7, LOW);
+      moveStop(BLUE);
       sm_state = SM_STATE_LEVELLING;
       while (digitalRead(D2) == HIGH)
       {
@@ -206,43 +233,18 @@ void loop()
     {
       float target_inclination_percent = getTargetInclinationPercent();
       float current_inclination_percent = getCurrentInclinationPercent();
-      float inc_diff = current_inclination_percent - reference_inclination_percent + target_inclination_percent;
+      float inc_diff = target_inclination_percent - (current_inclination_percent - reference_inclination_percent);
       if (inc_diff >= 1)
       {
-        // Target inclination is higher than current inclination, move the bike up
-        setLEDto(GREEN);
-        digitalWrite(A6, HIGH);
-        digitalWrite(A7, LOW);
+        moveUp(RED);
       }
       else if (inc_diff <= -1)
       {
-        // Target inclination is lower than current inclination, move the bike down
-        setLEDto(RED);
-        digitalWrite(A6, LOW);
-        digitalWrite(A7, HIGH);
+        moveDown(GREEN);
       }
       else
       {
-        // Target inclination is within 1% of current inclination, stop the bike
-        setLEDto(BLUE);
-        digitalWrite(A6, LOW);
-        digitalWrite(A7, LOW);
-      }
-
-      BLE.poll();
-      central = BLE.central();
-      if (central && central.connected())
-      {
-        current_millis = millis();
-        if (current_millis > previous_notification + NOTIFICATION_INTERVAL)
-        { // only send a notification every NOTIFICATION_INTERVAL milliseconds
-          writeIndoorBikeDataCharacteristic();
-          previous_notification = millis();
-        }
-      }
-      if (freshEvent())
-      { // A newer control point event has been written, so handle it
-        handleControlPoint();
+        moveStop(BLUE);
       }
     }
   }
