@@ -1,0 +1,8 @@
+digraph G {
+    starting [xlabel = "Starting point";];
+    starting -> levelling;
+    levelling -> connecting;
+    connecting -> levelling;
+    connecting -> running;
+    running -> levelling;
+}

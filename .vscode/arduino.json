@@ -1,0 +1,6 @@
+{
+    "port": "/dev/tty.usbmodem3301",
+    "board": "arduino:mbed_nano:nano33ble",
+    "sketch": "arduino-smart-climber.ino",
+    "output": "../builds/asc"
+}
