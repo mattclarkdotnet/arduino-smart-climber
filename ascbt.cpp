@@ -291,7 +291,7 @@ void fitnessMachineControlPointCharacteristicWritten(BLEDevice central, BLEChara
 }
 
 /**
- * Lights the internal RGB LED to blue on connection
+ * Only used for logging
  *
  * @return void
  */
@@ -304,7 +304,7 @@ void blePeripheralConnectHandler(BLEDevice central)
 }
 
 /*
- * Lights the internal RGB LED to green on disconnection
+ * Only used for logging
  *
  * @return void
  */

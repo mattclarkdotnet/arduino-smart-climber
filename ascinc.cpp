@@ -40,7 +40,7 @@ float getCurrentInclinationPercent()
 {
     // convert g to slope
     candidate_inclination = tan(asin(x_history_average)) * 100; // convert g to slope in %
-    if (abs(candidate_inclination - current_inclination) > 1)
+    if (abs(candidate_inclination - current_inclination) >= 1)
     {
         current_inclination = candidate_inclination;
         if (serial_debug_inc && Serial)

@@ -143,8 +143,8 @@ void loop()
       writeIndoorBikeDataCharacteristic();
       previous_notification_millis = millis();
     }
+    handleControlPoint(); // checks internally to avoid processing the same control point data twice
   }
-  handleControlPoint();
 
   switch (sm_state)
   {
