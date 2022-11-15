@@ -3,6 +3,7 @@
 
 #include "ascbt.h"
 #include "ascled.h"
+#include "ascinc.h"
 
 boolean serial_debug_bt = true;
 uint emulated_power = 0; // set to non-zero value to fake power data for debug purposes`
@@ -110,11 +111,12 @@ void setupBLE()
     // Add event handlers for connection and discoinnection events, so we can update LED colours etc
     BLE.setEventHandler(BLEConnected, blePeripheralConnectHandler);
     BLE.setEventHandler(BLEDisconnected, blePeripheralDisconnectHandler);
-}
-
-float getTargetInclinationPercent()
-{
-    return target_inclination_percent;
+    BLE.advertise();
+    if (serial_debug_bt && Serial)
+    {
+        Serial.println("BLE advertisement started");
+        Serial.println("Setup complete, entering levelling mode");
+    }
 }
 
 /**
@@ -172,13 +174,13 @@ void handleControlPoint()
             Serial.println("Setting indoor bike simulation parameters");
         }
         short gr = (fmcpData.values.OCTETS[3] << 8) + fmcpData.values.OCTETS[2]; // Short is 16 bit signed, so a negative grade is correctly converted from two bytes to signed value. Highest bit is sign bit
-        target_inclination_percent = gr / 100;
+        updateZwiftInclinationHistory(float(gr) / 100);
         if (serial_debug_bt && Serial)
-        { // As sent by Zwift, so may be scaled according to the "diffculty" setting, and will always be halved for descents
-            Serial.print("Inclination: raw ");
+        { // As sent by Zwift, so may be scaled according to the "difficulty" setting, and will always be halved for descents
+            Serial.print("Inclination from sim params: raw ");
             Serial.print(gr);
             Serial.print(" = ");
-            Serial.print(target_inclination_percent);
+            Serial.print(gr / 100);
             Serial.println("%");
         }
         writeFTMCPSuccess();
@@ -186,12 +188,15 @@ void handleControlPoint()
     }
     case fmcpSetTargetInclination:
     {
-        short in = (fmcpData.values.OCTETS[1] << 8) + fmcpData.values.OCTETS[0]; // Short is 16 bit signed, so a negative grade is correctly converted from two bytes to signed value. Highest bit is sign bit
-        target_inclination_percent = in / 100.0;
+        short gr = (fmcpData.values.OCTETS[1] << 8) + fmcpData.values.OCTETS[0]; // Short is 16 bit signed, so a negative grade is correctly converted from two bytes to signed value. Highest bit is sign bit
+        updateZwiftInclinationHistory(float(gr) / 100);
         if (serial_debug_bt && Serial)
-        { // As sent by Zwift, so may be scaled according to the "diffculty" setting, and will always be halved for descents
-            Serial.print("Setting target inclination: ");
-            Serial.println(target_inclination_percent);
+        { // As sent by Zwift, so may be scaled according to the "difficulty" setting, and will always be halved for descents
+            Serial.print("Inclination from set target: raw ");
+            Serial.print(gr);
+            Serial.print(" = ");
+            Serial.print(gr / 100);
+            Serial.println("%");
         }
         writeFTMCPSuccess();
         break;

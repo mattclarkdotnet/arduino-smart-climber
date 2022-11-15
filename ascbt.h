@@ -12,6 +12,4 @@ void writeFTMCPSuccess();
 void writeFTMCPFailure();
 void writeFTMCPResponse(uint8_t responseCode, uint8_t responseValue);
 void writeIndoorBikeDataCharacteristic();
-boolean freshEvent();
-float getTargetInclinationPercent();
 void handleControlPoint();

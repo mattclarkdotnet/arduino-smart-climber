@@ -7,7 +7,7 @@
 
 boolean serial_debug = true;
 #define SERIAL_SPEED 115200
-#define NOTIFICATION_INTERVAL 1000 // how often we'll notify the BLE central of our data (only relevant in debug mode for now to give power updates)
+#define NOTIFICATION_INTERVAL 1000
 
 enum sm_state_t // defined states (see statemachine.dot for the transition diagram)
 {
@@ -21,13 +21,8 @@ enum sm_state_t // defined states (see statemachine.dot for the transition diagr
 // State management variables
 long current_millis;
 int sm_state;
-long previous_notification = 0;
+long previous_notification_millis = 0;
 BLEDevice central;
-
-// Button input vars
-bool d2_was_pressed = false;
-bool d3_was_pressed = false;
-bool d4_was_pressed = false;
 
 // The reading of the inclinometer after levelling
 float reference_inclination_percent = 0.0;
@@ -102,14 +97,7 @@ void setup()
     return;
   }
   setupBLE();
-  // start advertising
-  BLE.advertise();
   sm_state = SM_STATE_LEVELLING;
-  if (serial_debug && Serial)
-  {
-    Serial.println("BLE advertisement started");
-    Serial.println("Setup complete, entering levelling mode");
-  }
 }
 
 void moveUp(colours_t colour)
@@ -140,18 +128,20 @@ void moveStop(colours_t colour)
  */
 void loop()
 {
-  delay(10);                  // Really no point in doing everything more than 100 times per second
-  updateInclinationHistory(); // keep track of inclination all the time
+  delay(10);                      // Really no point in doing everything more than 100 times per second
+  updateBikeInclinationHistory(); // keep track of bike inclination all the time
   // Always be alive so we stay connected
   BLE.poll();
   central = BLE.central();
   if (central && central.connected())
   {
     current_millis = millis();
-    if (current_millis > previous_notification + NOTIFICATION_INTERVAL)
-    { // only send a notification every NOTIFICATION_INTERVAL milliseconds
+    if (current_millis > previous_notification_millis + NOTIFICATION_INTERVAL)
+    {
+      // send a notification every NOTIFICATION_INTERVAL milliseconds, otherwise Zwift will show "no signal"
+      // There's no indoor bike data field for inclination, so fudging by sending a 0 power field (or the emulated power if that's set)
       writeIndoorBikeDataCharacteristic();
-      previous_notification = millis();
+      previous_notification_millis = millis();
     }
   }
   handleControlPoint();
@@ -195,7 +185,7 @@ void loop()
     else
     {
       // Move the bike up and down while one of the up/down buttons is pressed, otherwise stop
-      // TODO: some risk of debounce issues but will save that for later
+      // TODO: the control loop isn't great, perhaps slow down the input from Zwift since control is binary
       if (digitalRead(D3) == HIGH)
       {
         moveDown(GREEN);
