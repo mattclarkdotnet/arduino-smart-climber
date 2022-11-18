@@ -53,28 +53,42 @@ float getCurrentInclinationPercent()
     return current_inclination;
 }
 
-/**
- * keep a moving average of ZINC_HISTORY_LENGTH readings of the inclination sent by Zwift
- * these are quite fine grained, and read out every 10ms or so (per the main Arduino loop)
- * so long as Zwift updates us that often.  All a bit empirical when it comes to choosing
- * a history length
- *
- */
-#define ZINC_HISTORY_LENGTH 25
-float zinc_history[ZINC_HISTORY_LENGTH];
-int zinc_historyIndex = 0;
-float zinc_historySum = 0.0;
-float zinc_historyAverage = 0.0;
+float last_zwift_inclination_update = 0.0;
+float current_target_inclination = 0.0;
+long last_zwift_inclination_update_millis = 0;
+long last_target_inclination_update_millis = 0;
 
 void updateZwiftInclinationHistory(float newZInclination)
 {
-    zinc_historySum = zinc_historySum - x_history[zinc_historyIndex] + newZInclination;
-    zinc_history[zinc_historyIndex] = x;
-    zinc_historyIndex = (zinc_historyIndex + 1) % ZINC_HISTORY_LENGTH;
-    zinc_historyAverage = zinc_historySum / ZINC_HISTORY_LENGTH;
+    last_zwift_inclination_update = newZInclination;
+    last_zwift_inclination_update_millis = millis();
+    if (abs(last_zwift_inclination_update - current_target_inclination) >= 1)
+    {
+        // always update the target if the deviation is at least 1%
+        current_target_inclination = newZInclination;
+        last_target_inclination_update_millis = millis();
+        if (serial_debug_inc && Serial)
+        {
+            Serial.print("Zwift inclination changed by at least 1%: ");
+            Serial.print(current_target_inclination);
+            Serial.println("%");
+        }
+    }
 }
 
 float getTargetInclinationPercent()
 {
-    return zinc_historyAverage;
+    if (millis() - last_target_inclination_update_millis < 3000)
+    {
+        // We made an update to the target inclination recently, stick with that
+        return current_target_inclination;
+    }
+    else
+    {
+        // The target hasn't been updated for 3 seconds, either because it hasn't changed or because the change was less than 1%
+        // so update the current target to the last one sent by Zwift anyway.  This will smooth out minor bumbs and stop the bike
+        // moving up and down for tiny deviations, while also making it accurate if the deviations are long lived.
+        current_target_inclination = last_zwift_inclination_update;
+        return current_target_inclination;
+    }
 }

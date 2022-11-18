@@ -41,5 +41,6 @@
         "*.inc": "cpp",
         "variant": "cpp",
         "*.ipp": "cpp"
-    }
+    },
+    "C_Cpp.intelliSenseEngineFallback": "Disabled"
 }
