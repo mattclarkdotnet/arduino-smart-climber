@@ -1,4 +1,4 @@
-void updateBikeInclinationHistory();
-void updateZwiftInclinationHistory(float newZInclination);
+void updateBikeInclination(long delta_t);
+void updateZwiftInclination(float newZInclination);
 float getCurrentInclinationPercent();
 float getTargetInclinationPercent();

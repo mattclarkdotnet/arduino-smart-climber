@@ -174,7 +174,7 @@ void handleControlPoint()
             Serial.println("Setting indoor bike simulation parameters");
         }
         short gr = (fmcpData.values.OCTETS[3] << 8) + fmcpData.values.OCTETS[2]; // Short is 16 bit signed, so a negative grade is correctly converted from two bytes to signed value. Highest bit is sign bit
-        updateZwiftInclinationHistory(float(gr) / 100);
+        updateZwiftInclination(float(gr) / 100);
         if (serial_debug_bt && Serial)
         { // As sent by Zwift, so may be scaled according to the "difficulty" setting, and will always be halved for descents
             Serial.print("Inclination from sim params: raw ");
@@ -189,7 +189,7 @@ void handleControlPoint()
     case fmcpSetTargetInclination:
     {
         short gr = (fmcpData.values.OCTETS[1] << 8) + fmcpData.values.OCTETS[0]; // Short is 16 bit signed, so a negative grade is correctly converted from two bytes to signed value. Highest bit is sign bit
-        updateZwiftInclinationHistory(float(gr) / 100);
+        updateZwiftInclination(float(gr) / 100);
         if (serial_debug_bt && Serial)
         { // As sent by Zwift, so may be scaled according to the "difficulty" setting, and will always be halved for descents
             Serial.print("Inclination from set target: raw ");

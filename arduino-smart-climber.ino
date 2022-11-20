@@ -20,6 +20,7 @@ enum sm_state_t // defined states (see statemachine.dot for the transition diagr
 
 // State management variables
 long current_millis;
+long last_millis;
 int sm_state;
 long previous_notification_millis = 0;
 BLEDevice central;
@@ -128,20 +129,21 @@ void moveStop(colours_t colour)
  */
 void loop()
 {
-  delay(10);                      // Really no point in doing everything more than 100 times per second
-  updateBikeInclinationHistory(); // keep track of bike inclination all the time
+  delay(10); // Really no point in doing everything more than 100 times per second
+  last_millis = current_millis;
+  current_millis = millis();
+  updateBikeInclination(current_millis - last_millis); // keep track of bike inclination all the time
   // Always be alive so we stay connected
   BLE.poll();
   central = BLE.central();
   if (central && central.connected())
   {
-    current_millis = millis();
     if (current_millis > previous_notification_millis + NOTIFICATION_INTERVAL)
     {
       // send a notification every NOTIFICATION_INTERVAL milliseconds, otherwise Zwift will show "no signal"
       // There's no indoor bike data field for inclination, so fudging by sending a 0 power field (or the emulated power if that's set)
+      previous_notification_millis = current_millis;
       writeIndoorBikeDataCharacteristic();
-      previous_notification_millis = millis();
     }
     handleControlPoint(); // checks internally to avoid processing the same control point data twice
   }
