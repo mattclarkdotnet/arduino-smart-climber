@@ -6,7 +6,8 @@
 #include "ascinc.h"
 
 boolean serial_debug_bt = true;
-uint emulated_power = 0; // set to non-zero value to fake power data for debug purposes`
+boolean fix_negative_grades = true; // Zwift halves negative grades, so we should double them
+uint emulated_power = 0;            // set to non-zero value to fake power data for debug purposes
 
 // This fmcp_data_t structure represents the BLE control point data. The first octet represents the opcode of the request
 // followed by a parameter array of maximum 18 octects
@@ -173,7 +174,11 @@ void handleControlPoint()
         {
             Serial.println("Setting indoor bike simulation parameters");
         }
-        short gr = (fmcpData.values.OCTETS[3] << 8) + fmcpData.values.OCTETS[2]; // Short is 16 bit signed, so a negative grade is correctly converted from two bytes to signed value. Highest bit is sign bit
+        short gr = (fmcpData.values.OCTETS[3] << 8) + fmcpData.values.OCTETS[2];
+        if (fix_negative_grades && gr < 0)
+        {
+            gr = gr * 2;
+        }
         updateZwiftInclination(float(gr) / 100);
         if (serial_debug_bt && Serial)
         { // As sent by Zwift, so may be scaled according to the "difficulty" setting, and will always be halved for descents
