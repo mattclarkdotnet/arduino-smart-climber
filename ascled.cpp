@@ -2,9 +2,9 @@
 
 #include "ascled.h"
 
-#define FULL_BRIGHTNESS 0
-#define HALF_BRIGHTNESS 512
-#define ZERO_BRIGHTNESS 1024
+#define FULL_BRIGHTNESS 0 // Because pulling the pin down allows current to flow through the RGB drain
+#define HALF_BRIGHTNESS 128
+#define ZERO_BRIGHTNESS 255
 
 void setupLED()
 {
@@ -36,8 +36,11 @@ void setLEDto(colours_t colour_name)
     case PURPLE:
         setLEDColour(FULL_BRIGHTNESS, ZERO_BRIGHTNESS, FULL_BRIGHTNESS);
         break;
-    case ORANGE:
-        setLEDColour(FULL_BRIGHTNESS, HALF_BRIGHTNESS, ZERO_BRIGHTNESS);
+    case AQUA:
+        setLEDColour(ZERO_BRIGHTNESS, FULL_BRIGHTNESS, FULL_BRIGHTNESS);
+        break;
+    case YELLOW:
+        setLEDColour(FULL_BRIGHTNESS, FULL_BRIGHTNESS, ZERO_BRIGHTNESS);
         break;
     case WHITE:
         setLEDColour(FULL_BRIGHTNESS, FULL_BRIGHTNESS, FULL_BRIGHTNESS);

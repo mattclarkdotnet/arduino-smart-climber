@@ -6,8 +6,6 @@
 #include "ascinc.h"
 
 boolean serial_debug_bt = true;
-boolean fix_negative_grades = true; // Zwift halves negative grades, so we should double them
-uint emulated_power = 0;            // set to non-zero value to fake power data for debug purposes
 
 // This fmcp_data_t structure represents the BLE control point data. The first octet represents the opcode of the request
 // followed by a parameter array of maximum 18 octects
@@ -68,6 +66,7 @@ short fmcpValueLength;
 volatile long lastControlPointEvent = 0;
 long previousControlPointEvent = 0;
 float target_inclination_percent = 0.0;
+BLEDevice central;
 
 // Fitness Machine Service, uuid 0x1826 or 00001826-0000-1000-8000-00805F9B34FB
 BLEService fitnessMachineService("1826"); // FTMS
@@ -75,16 +74,13 @@ BLEService fitnessMachineService("1826"); // FTMS
 // Service characteristics exposed by FTMS
 BLECharacteristic fitnessMachineFeatureCharacteristic("2ACC", BLERead, 8);                                  // Fitness Machine Feature, mandatory, read
 BLECharacteristic indoorBikeDataCharacteristic("2AD2", BLENotify, 8);                                       // Indoor Bike Data, optional, notify
-BLECharacteristic supportedInclinationRangeCharacteristic("2AD5", BLERead, 6);                              // Supported Inclination, read, optional
 BLECharacteristic fitnessMachineControlPointCharacteristic("2AD9", BLEWrite | BLEIndicate, FMCP_DATA_SIZE); // Fitness Machine Control Point, optional, write & indicate
 BLECharacteristic fitnessMachineStatusCharacteristic("2ADA", BLENotify, 2);                                 // Fitness Machine Status, mandatory, notify
 
 // Buffers used to write to the characteristics and initial values
-unsigned char ftmfBuffer[4] = {0b10001001, 0b01000000, 0b00000010, 0b00000000}; // FM Features: 3 (Inclination), plus 0 (Average speed) and 7 (power), to placate zwift.  FM Target setting features: 1 (Inclination)
+unsigned char ftmfBuffer[4] = {0b00001000, 0b00000000, 0b00000000, 0b00000000}; // FM Features: 3 (Inclination)
 unsigned char ibdBuffer[8] = {0, 0, 0, 0, 0, 0, 0, 0};                          // Needs to be large enough to accomodate all data we might send - in practice we only send power in debug mode
-unsigned char sirBuffer[6] = {0x9C, 0xFF, 0xC8, 0x00, 0x0A, 0x00};              // Supported Inclination Range - Min, Max, Min increment (sint16, sint16, uint16) units are 0.1%, so 100=10%
-unsigned char ftmsBuffer[2] = {0, 0};
-unsigned char tsBuffer[2] = {0x0, 0x0}; // Training status: flags: 0 (no string present); Status: 0x00 = Other
+unsigned char ftmsBuffer[2] = {0x04};                                           // Machine started by user - we send this all the time when we're powered on
 unsigned char ftmcpBuffer[20];
 
 void setupBLE()
@@ -94,7 +90,6 @@ void setupBLE()
     BLE.setAdvertisedService(fitnessMachineService);
     fitnessMachineService.addCharacteristic(fitnessMachineFeatureCharacteristic);
     fitnessMachineService.addCharacteristic(indoorBikeDataCharacteristic);
-    fitnessMachineService.addCharacteristic(supportedInclinationRangeCharacteristic);
     fitnessMachineService.addCharacteristic(fitnessMachineControlPointCharacteristic);
     fitnessMachineService.addCharacteristic(fitnessMachineStatusCharacteristic);
     BLE.addService(fitnessMachineService);
@@ -102,9 +97,7 @@ void setupBLE()
     // Write values to the characteristics that can be read
     fitnessMachineFeatureCharacteristic.writeValue(ftmfBuffer, 4);
     indoorBikeDataCharacteristic.writeValue(ibdBuffer, 8);
-    supportedInclinationRangeCharacteristic.writeValue(sirBuffer, 6);
-    fitnessMachineStatusCharacteristic.writeValue(ftmsBuffer, 2);
-    // trainingStatusCharacteristic.writeValue(tsBuffer, 2);
+    fitnessMachineStatusCharacteristic.writeValue(ftmsBuffer, 1);
 
     // Write requests to the control point characteristic are handled by an event handler
     fitnessMachineControlPointCharacteristic.setEventHandler(BLEWritten, fitnessMachineControlPointCharacteristicWritten);
@@ -118,6 +111,17 @@ void setupBLE()
         Serial.println("BLE advertisement started");
         Serial.println("Setup complete, entering levelling mode");
     }
+}
+
+boolean btConnected()
+{
+    central = BLE.central();
+    if (!central)
+    {
+        BLE.poll();
+        central = BLE.central();
+    }
+    return central && central.connected();
 }
 
 /**
@@ -175,10 +179,6 @@ void handleControlPoint()
             Serial.println("Setting indoor bike simulation parameters");
         }
         short gr = (fmcpData.values.OCTETS[3] << 8) + fmcpData.values.OCTETS[2];
-        if (fix_negative_grades && gr < 0)
-        {
-            gr = gr * 2;
-        }
         updateZwiftInclination(float(gr) / 100);
         if (serial_debug_bt && Serial)
         { // As sent by Zwift, so may be scaled according to the "difficulty" setting, and will always be halved for descents
@@ -192,20 +192,6 @@ void handleControlPoint()
         break;
     }
     case fmcpSetTargetInclination:
-    {
-        short gr = (fmcpData.values.OCTETS[1] << 8) + fmcpData.values.OCTETS[0]; // Short is 16 bit signed, so a negative grade is correctly converted from two bytes to signed value. Highest bit is sign bit
-        updateZwiftInclination(float(gr) / 100);
-        if (serial_debug_bt && Serial)
-        { // As sent by Zwift, so may be scaled according to the "difficulty" setting, and will always be halved for descents
-            Serial.print("Inclination from set target: raw ");
-            Serial.print(gr);
-            Serial.print(" = ");
-            Serial.print(gr / 100);
-            Serial.println("%");
-        }
-        writeFTMCPSuccess();
-        break;
-    }
     case fmcpReset:
     case fmcpSetTargetResistanceLevel:
     case fmcpSetTargetSpeed:
@@ -234,20 +220,30 @@ void handleControlPoint()
  *
  * @return void
  */
-void writeIndoorBikeDataCharacteristic()
+void writeIndoorBikeDataCharacteristic(uint fakePower)
 {
 
-    ibdBuffer[0] = 0x01 | flagInstantaneousPower; // bit 0 = 1 (instantaneous speed not present)
-    ibdBuffer[1] = 0x00;                          // unused
-    ibdBuffer[2] = 0x00;                          // first characteristic low byte
-    ibdBuffer[3] = 0x00;                          // first characteristic high byte
+    if (fakePower)
+    {
+        ibdBuffer[0] = 0x01 | flagInstantaneousPower; // bit 0 = 1 (instantaneous speed not present)
+    }
+    else
+    {
+        ibdBuffer[0] = 0x01;
+    }
+    ibdBuffer[1] = 0x00; // unused
+    ibdBuffer[2] = 0x00; // first characteristic low byte
+    ibdBuffer[3] = 0x00; // first characteristic high byte
     ibdBuffer[4] = 0x00;
     ibdBuffer[5] = 0x00;
     ibdBuffer[6] = 0x00;
     ibdBuffer[7] = 0x00;
 
-    ibdBuffer[2] = (int)round(emulated_power) & 0xFF; // Instantaneous Power, uint16
-    ibdBuffer[3] = ((int)round(emulated_power) >> 8) & 0xFF;
+    if (fakePower)
+    {
+        ibdBuffer[2] = (int)round(fakePower) & 0xFF; // Instantaneous Power, uint16
+        ibdBuffer[3] = ((int)round(fakePower) >> 8) & 0xFF;
+    }
     indoorBikeDataCharacteristic.writeValue(ibdBuffer, 8);
 }
 

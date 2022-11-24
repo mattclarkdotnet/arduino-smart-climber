@@ -1,19 +1,20 @@
-#include <ArduinoBLE.h>
 #include <Arduino_LSM9DS1.h>
 
 #include "ascled.h"
 #include "ascbt.h"
 #include "ascinc.h"
+#include "ascmotor.h"
 
 boolean serial_debug = true;
+long last_debug_millis = 0;
 #define SERIAL_SPEED 115200
-#define NOTIFICATION_INTERVAL 1000
+#define NOTIFICATION_INTERVAL 1000 // send bike data notifications to Zwift every 1 second
+uint emulated_power = 100;         // set to non-zero value to fake power data for debug purposes
 
 enum sm_state_t // defined states (see statemachine.dot for the transition diagram)
 {
   SM_STATE_STARTING,
   SM_STATE_LEVELLING,
-  SM_STATE_CONNECTING,
   SM_STATE_RUNNING,
   SM_STATE_ERROR
 };
@@ -23,7 +24,7 @@ long current_millis;
 long last_millis;
 int sm_state;
 long previous_notification_millis = 0;
-BLEDevice central;
+long last_motor_stop_millis = 0;
 
 // The reading of the inclinometer after levelling
 float reference_inclination_percent = 0.0;
@@ -45,11 +46,8 @@ void setup()
   pinMode(D3, INPUT);
   pinMode(D4, INPUT);
 
-  // Configure motor control pins and set both low, i.e. no motor movement
-  pinMode(A6, OUTPUT);
-  pinMode(A7, OUTPUT);
-  digitalWrite(A6, LOW);
-  digitalWrite(A7, LOW);
+  // Configure the motor pins and state,
+  setupMotor();
 
   // Serial setup
   if (serial_debug)
@@ -101,27 +99,6 @@ void setup()
   sm_state = SM_STATE_LEVELLING;
 }
 
-void moveUp(colours_t colour)
-{
-  setLEDto(colour);
-  digitalWrite(A6, LOW);
-  digitalWrite(A7, HIGH);
-}
-
-void moveDown(colours_t colour)
-{
-  setLEDto(colour);
-  digitalWrite(A6, HIGH);
-  digitalWrite(A7, LOW);
-}
-
-void moveStop(colours_t colour)
-{
-  setLEDto(colour);
-  digitalWrite(A6, LOW);
-  digitalWrite(A7, LOW);
-}
-
 /**
  * Arduino loop, runs continuously
  *
@@ -132,20 +109,26 @@ void loop()
   delay(10); // Really no point in doing everything more than 100 times per second
   last_millis = current_millis;
   current_millis = millis();
+  boolean loop_debug = false;
+  if (current_millis - last_debug_millis > 1000)
+  {
+    last_debug_millis = current_millis;
+    loop_debug = true;
+  }
   updateBikeInclination(current_millis - last_millis); // keep track of bike inclination all the time
   // Always be alive so we stay connected
-  BLE.poll();
-  central = BLE.central();
-  if (central && central.connected())
+  boolean bt_connected = btConnected();
+  if (bt_connected)
   {
     if (current_millis > previous_notification_millis + NOTIFICATION_INTERVAL)
     {
       // send a notification every NOTIFICATION_INTERVAL milliseconds, otherwise Zwift will show "no signal"
       // There's no indoor bike data field for inclination, so fudging by sending a 0 power field (or the emulated power if that's set)
       previous_notification_millis = current_millis;
-      writeIndoorBikeDataCharacteristic();
+      writeIndoorBikeDataCharacteristic(emulated_power);
     }
-    handleControlPoint(); // checks internally to avoid processing the same control point data twice
+    // updates the Zwift inclination history, and checks internally to avoid processing the same control point data twice
+    handleControlPoint();
   }
 
   switch (sm_state)
@@ -155,7 +138,7 @@ void loop()
     // Blink the LED to show error condition
     while (1)
     {
-      setLEDto(ORANGE);
+      setLEDto(AQUA);
       delay(250);
       setLEDto(RED);
       delay(250);
@@ -165,12 +148,12 @@ void loop()
   case SM_STATE_LEVELLING:
   {
     // Update inclination while waiting for the user to level the bike
-    setLEDto(WHITE);
+    setLEDto(bt_connected ? WHITE : YELLOW);
     if (digitalRead(D2) == HIGH)
     {
       // User has pressed the levelling button. Stop all motion, record the reference inclination and move on to the next state
-      moveStop(WHITE);
-      reference_inclination_percent = getCurrentInclinationPercent(); // set the reference inclination to the current inclination
+      moveStop(bt_connected ? WHITE : YELLOW);
+      reference_inclination_percent = getAverageInclinationPercent(); // set the reference inclination to the current inclination
       sm_state = SM_STATE_RUNNING;
       while (digitalRead(D2) == HIGH)
       {
@@ -198,18 +181,17 @@ void loop()
       }
       else
       {
-        moveStop(WHITE);
+        moveStop(bt_connected ? WHITE : YELLOW);
       }
     }
     break;
   }
   case SM_STATE_RUNNING:
   {
-    setLEDto(BLUE);
     if (digitalRead(D2) == HIGH)
     {
       // User has pressed the levelling button durring normal operation, return to levelling mode
-      moveStop(BLUE);
+      moveStop(bt_connected ? BLUE : AQUA);
       sm_state = SM_STATE_LEVELLING;
       while (digitalRead(D2) == HIGH)
       {
@@ -224,19 +206,46 @@ void loop()
     else
     {
       float target_inclination_percent = getTargetInclinationPercent();
-      float current_inclination_percent = getCurrentInclinationPercent();
-      float inc_diff = target_inclination_percent - (current_inclination_percent - reference_inclination_percent);
-      if (inc_diff >= 1)
+      float average_inc_diff = target_inclination_percent - (getAverageInclinationPercent() - reference_inclination_percent);
+      float latest_inc_diff = target_inclination_percent - (getLatestInclinationPercent() - reference_inclination_percent);
+      motor_state_t motor_state = getMotorState();
+      // By default, aim for a maximum difference to target of 1% and use the average (slower but more accurate) difference.
+      // If we haven't moved in a while, narrow the target difference to 0.5% and use the average (slower but more accurate) difference.
+      // If the motor is already moving, use the default target difference but use the latest (faster but less accurate) difference.
+      // Consider this all to be a very crude PID controller with the benefit of being very simple.
+      float run_diff = 1.0;
+      float use_diff = average_inc_diff;
+      if ((motor_state == ST_MOTOR_STOPPED) && last_motor_stop_millis && (current_millis - last_motor_stop_millis > 2000))
+      {
+        run_diff = 0.5; // haven't moved for a bit, try to get a bit closer to the target
+      }
+      else if (motor_state == ST_MOTOR_UP || motor_state == ST_MOTOR_DOWN)
+      {
+        use_diff = latest_inc_diff; // we're moving, use the quicker-changing but noiser inclination measure
+      }
+      if (loop_debug && serial_debug && Serial)
+      {
+        Serial.print("run_diff ");
+        Serial.print(run_diff);
+        Serial.print(" use_diff ");
+        Serial.println(use_diff);
+      }
+      // Switch the motor direction according to the inputs set above
+      if (use_diff >= run_diff)
       {
         moveUp(RED);
       }
-      else if (inc_diff <= -1)
+      else if (use_diff <= -run_diff)
       {
         moveDown(GREEN);
       }
       else
       {
-        moveStop(BLUE);
+        if (motor_state == ST_MOTOR_UP || motor_state == ST_MOTOR_DOWN)
+        {
+          last_motor_stop_millis = current_millis;
+        }
+        moveStop(bt_connected ? BLUE : AQUA);
       }
     }
   }

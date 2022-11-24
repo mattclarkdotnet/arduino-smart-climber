@@ -5,15 +5,19 @@
 #include "ascinc.h"
 
 boolean serial_debug_inc = false;
+float scale_difficulty_by = 1.0;    // allows you to e.g. ride with Zwift at 50% difficulty while still getting full inclination adjustment
+boolean fix_negative_grades = true; // Zwift halves negative grades regardless of difficulty setting, so we should double them
+
+float current_target_inclination = 0.0;
 
 /**
  * keep a moving average of HISTORY_LENGTH readings of the x reading of the accelerometer.  Keep the maths simple on each update.
  *
  */
 #define HISTORY_LENGTH 100
-float current_inclination_percent = 0.0;
+float average_inclination_percent = 0.0;
 float x, y, z;                                          // Last read acceleration values
-float bike_inclination_history[HISTORY_LENGTH] = {0.0}; // Measured in radians
+float bike_inclination_history[HISTORY_LENGTH] = {0.0}; // Measured in percent
 int bike_inclination_history_readIndex = 0;             // the index of the current reading
 float bike_inclination_history_total = 0.0;             // the running total
 float bike_inclination_history_average = 0.0;           // the average
@@ -28,42 +32,39 @@ void updateBikeInclination(long delta_t)
         bike_inclination_history[bike_inclination_history_readIndex] = inclination_percent;
         bike_inclination_history_readIndex = (bike_inclination_history_readIndex + 1) % HISTORY_LENGTH;
         bike_inclination_history_average = bike_inclination_history_total / HISTORY_LENGTH;
-        current_inclination_percent = bike_inclination_history_average;
+        average_inclination_percent = bike_inclination_history_average;
     }
     if (serial_debug_inc && Serial)
     {
-        Serial.print("current_inclination_percent: ");
-        Serial.println(current_inclination_percent);
+        Serial.print("average_inclination_percent: ");
+        Serial.println(average_inclination_percent);
     }
 }
 
-float getCurrentInclinationPercent()
+float getAverageInclinationPercent()
 {
-    return current_inclination_percent;
+    return average_inclination_percent;
 }
 
-float last_zwift_inclination_update = 0.0;
-float current_target_inclination = 0.0;
-long last_zwift_inclination_update_millis = 0;
-long last_target_inclination_update_millis = 0;
+float getLatestInclinationPercent()
+{
+    // return the average of the last 10 readings in bike_inclination_history
+    float latest_inclination_percent = 0.0;
+    for (int i = 0; i < 10; i++)
+    {
+        latest_inclination_percent += bike_inclination_history[(bike_inclination_history_readIndex - i) % HISTORY_LENGTH];
+    }
+    latest_inclination_percent /= 10.0;
+    return latest_inclination_percent;
+}
 
 void updateZwiftInclination(float newZInclination)
 {
-    long now_millis = millis();
-    last_zwift_inclination_update = newZInclination;
-    last_zwift_inclination_update_millis = now_millis;
-    if ((abs(last_zwift_inclination_update - current_target_inclination) >= 1) || (now_millis - last_target_inclination_update_millis < 3000))
+    if (fix_negative_grades && newZInclination < 0)
     {
-        // update the target if the deviation is at least 1%, or if we haven't made an update for 3 seconds
-        current_target_inclination = newZInclination;
-        last_target_inclination_update_millis = now_millis;
-        if (serial_debug_inc && Serial)
-        {
-            Serial.print("Target inclination changed: ");
-            Serial.print(current_target_inclination);
-            Serial.println("%");
-        }
+        newZInclination = newZInclination * 2;
     }
+    current_target_inclination = newZInclination * scale_difficulty_by;
 }
 
 float getTargetInclinationPercent()

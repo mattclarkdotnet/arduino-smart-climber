@@ -27,9 +27,9 @@
             "includePath": [
                 "/Users/matt/Library/Arduino15/packages/arduino/hardware/mbed_nano/3.4.1/cores/arduino",
                 "/Users/matt/Library/Arduino15/packages/arduino/hardware/mbed_nano/3.4.1/variants/ARDUINO_NANO33BLE",
-                "/Users/matt/Documents/Arduino/libraries/ArduinoBLE/src",
                 "/Users/matt/Documents/Arduino/libraries/Arduino_LSM9DS1/src",
                 "/Users/matt/Library/Arduino15/packages/arduino/hardware/mbed_nano/3.4.1/libraries/Wire",
+                "/Users/matt/Documents/Arduino/libraries/ArduinoBLE/src",
                 "/Users/matt/Library/Arduino15/packages/arduino/hardware/mbed_nano/3.4.1/cores/arduino/api/deprecated",
                 "/Users/matt/Library/Arduino15/packages/arduino/hardware/mbed_nano/3.4.1/cores/arduino/api/deprecated-avr-comp",
                 "/Users/matt/Library/Arduino15/packages/arduino/tools/arm-none-eabi-gcc/7-2017q4/arm-none-eabi/include/c++/7.2.1",

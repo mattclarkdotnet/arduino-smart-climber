@@ -1,11 +1,14 @@
+#pragma once
+
 enum colours_t // specific LED colours that are used to indicate state
 {
-    RED,    // Only used in flashing red/green to indicate an error
-    GREEN,  // BT connected to client
-    BLUE,   // BT active but not connected
-    PURPLE, // Performing setup
-    ORANGE,
-    WHITE, // Levelling mode
+    PURPLE, // Performing Arduino setup
+    WHITE,  // BT connected in SM_STATE_LEVELLING
+    YELLOW, // BT not connected in SM_STATE_LEVELLING
+    BLUE,   // BT connected in SM_STATE_RUNNING
+    AQUA,   // BT not connected in SM_STATE_RUNNING
+    RED,    // Moving up
+    GREEN,  // Moving down
 };
 
 void setupLED();
