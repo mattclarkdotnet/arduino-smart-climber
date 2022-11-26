@@ -8,9 +8,9 @@
 
 // Public interface
 void setupBLE();
-void writeIndoorBikeDataCharacteristic(uint fakePower);
-void handleControlPoint();
-boolean btConnected();
+void writeIndoorBikeDataCharacteristic(uint16_t cadence, uint16_t power);
+boolean handleControlPoint();
+boolean centralConnected();
 
 // Private functions
 void fitnessMachineControlPointCharacteristicWritten(BLEDevice central, BLECharacteristic characteristic);

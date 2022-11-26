@@ -66,7 +66,12 @@ short fmcpValueLength;
 volatile long lastControlPointEvent = 0;
 long previousControlPointEvent = 0;
 float target_inclination_percent = 0.0;
-BLEDevice central;
+BLEDevice central; // i.e. Zwift
+
+/**
+ * We're going to advertise cadence, power, resistance and inclination.  This is so we can connect as a client
+ * to the actual trainer, and proxy the power, cadence and resistance data from/to the trainer.
+ */
 
 // Fitness Machine Service, uuid 0x1826 or 00001826-0000-1000-8000-00805F9B34FB
 BLEService fitnessMachineService("1826"); // FTMS
@@ -78,9 +83,9 @@ BLECharacteristic fitnessMachineControlPointCharacteristic("2AD9", BLEWrite | BL
 BLECharacteristic fitnessMachineStatusCharacteristic("2ADA", BLENotify, 2);                                 // Fitness Machine Status, mandatory, notify
 
 // Buffers used to write to the characteristics and initial values
-unsigned char ftmfBuffer[4] = {0b00001000, 0b00000000, 0b00000000, 0b00000000}; // FM Features: 3 (Inclination)
-unsigned char ibdBuffer[8] = {0, 0, 0, 0, 0, 0, 0, 0};                          // Needs to be large enough to accomodate all data we might send - in practice we only send power in debug mode
-unsigned char ftmsBuffer[2] = {0x04};                                           // Machine started by user - we send this all the time when we're powered on
+unsigned char ftmfBuffer[4] = {0b10001010, 0b01000000, 0b00000000, 0b00000000}; // FM Features: 1 (Cadence), 3 (Inclination), 7 (Resistance level), 14 (Power Measurement)
+unsigned char ibdBuffer[8] = {0, 0, 0, 0, 0, 0, 0, 0};                          // Needs to be large enough to accomodate all data we might send, so cadence and power
+unsigned char ftmsBuffer[2] = {0x04, 0x00};                                     // Machine started by user - we send this all the time when we're powered on
 unsigned char ftmcpBuffer[20];
 
 void setupBLE()
@@ -113,30 +118,43 @@ void setupBLE()
     }
 }
 
-boolean btConnected()
+boolean centralConnected()
 {
-    central = BLE.central();
-    if (!central)
+    // First give Zwift a chance to connect to us
+    if (!(central && central.connected()))
     {
         BLE.poll();
         central = BLE.central();
     }
-    return central && central.connected();
+    if (!(central && central.connected()))
+    {
+        if (serial_debug_bt && Serial)
+        {
+            Serial.println("Zwift did not connect to us");
+        }
+        return false;
+    }
+    if (serial_debug_bt && Serial)
+    {
+        Serial.println("Zwift connected");
+    }
+    return true;
 }
 
 /**
  * Handles an incoming Fitness Machine Control Point request
  *
- * @return void
+ * @return boolean true if the request was handled, false if not
  */
-void handleControlPoint()
+boolean handleControlPoint()
 {
     // If the time of the last event hasn't changed, we've already handled this event
     if (previousControlPointEvent == lastControlPointEvent)
     {
-        return;
+        return false;
     }
-    // Record that we've handed this event
+    boolean handled_successfully = true;
+    // Record that we've handled this event (either successfully or not)
     previousControlPointEvent = lastControlPointEvent;
     if (serial_debug_bt && Serial)
     {
@@ -210,9 +228,11 @@ void handleControlPoint()
     case fmcpSetTargetedCadence:
     {
         writeFTMCPFailure();
+        handled_successfully = false;
         break;
     }
     }
+    return handled_successfully;
 }
 
 /**
@@ -220,30 +240,22 @@ void handleControlPoint()
  *
  * @return void
  */
-void writeIndoorBikeDataCharacteristic(uint fakePower)
+void writeIndoorBikeDataCharacteristic(uint16_t cadence, uint16_t power)
 {
-
-    if (fakePower)
-    {
-        ibdBuffer[0] = 0x01 | flagInstantaneousPower; // bit 0 = 1 (instantaneous speed not present)
-    }
-    else
-    {
-        ibdBuffer[0] = 0x01;
-    }
-    ibdBuffer[1] = 0x00; // unused
-    ibdBuffer[2] = 0x00; // first characteristic low byte
-    ibdBuffer[3] = 0x00; // first characteristic high byte
+    ibdBuffer[0] = 0x01 | flagInstantaneousPower | flagInstantaneousCadence; // bit 0 = 1 (instantaneous speed not present)
+    ibdBuffer[1] = 0x00;                                                     // unused
+    ibdBuffer[2] = 0x00;                                                     // first characteristic low byte
+    ibdBuffer[3] = 0x00;                                                     // first characteristic high byte
     ibdBuffer[4] = 0x00;
     ibdBuffer[5] = 0x00;
     ibdBuffer[6] = 0x00;
     ibdBuffer[7] = 0x00;
 
-    if (fakePower)
-    {
-        ibdBuffer[2] = (int)round(fakePower) & 0xFF; // Instantaneous Power, uint16
-        ibdBuffer[3] = ((int)round(fakePower) >> 8) & 0xFF;
-    }
+    ibdBuffer[2] = (int)round(cadence) & 0xFF;
+    ibdBuffer[3] = ((int)round(cadence) >> 8) & 0xFF;
+    ibdBuffer[4] = (int)round(power) & 0xFF;
+    ibdBuffer[5] = ((int)round(power) >> 8) & 0xFF;
+
     indoorBikeDataCharacteristic.writeValue(ibdBuffer, 8);
 }
 

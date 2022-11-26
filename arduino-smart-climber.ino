@@ -4,12 +4,14 @@
 #include "ascbt.h"
 #include "ascinc.h"
 #include "ascmotor.h"
+#include "asctrainer.h"
 
 boolean serial_debug = true;
 long last_debug_millis = 0;
 #define SERIAL_SPEED 115200
 #define NOTIFICATION_INTERVAL 1000 // send bike data notifications to Zwift every 1 second
-uint emulated_power = 100;         // set to non-zero value to fake power data for debug purposes
+uint16_t emulated_power = 100;     // set to non-zero value to fake power data for debug purposes
+uint16_t emulated_cadence = 70;    // set to non-zero value to fake cadence data for debug purposes
 
 enum sm_state_t // defined states (see statemachine.dot for the transition diagram)
 {
@@ -106,7 +108,8 @@ void setup()
  */
 void loop()
 {
-  delay(10); // Really no point in doing everything more than 100 times per second
+  // Timing and loop housekeeping
+  delay(10);
   last_millis = current_millis;
   current_millis = millis();
   boolean loop_debug = false;
@@ -115,22 +118,41 @@ void loop()
     last_debug_millis = current_millis;
     loop_debug = true;
   }
-  updateBikeInclination(current_millis - last_millis); // keep track of bike inclination all the time
-  // Always be alive so we stay connected
-  boolean bt_connected = btConnected();
-  if (bt_connected)
+
+  // Track physical bike inclination regardless of state
+  updateBikeInclination(current_millis - last_millis);
+
+  // Manage bluetooth regardless of state
+  boolean cp_handled;
+  boolean central_connected = centralConnected();
+  boolean peripheral_connected = peripheralConnected();
+  boolean bt_connected = central_connected && peripheral_connected;
+
+  // Read an update from Zwift and store resistance level and inclination in the cp data structure.
+  // This function checks internally to avoid processing the same control point data twice
+  // It needs to run frequently as Zwift updates much more often than once per second
+  if (central_connected)
   {
-    if (current_millis > previous_notification_millis + NOTIFICATION_INTERVAL)
-    {
-      // send a notification every NOTIFICATION_INTERVAL milliseconds, otherwise Zwift will show "no signal"
-      // There's no indoor bike data field for inclination, so fudging by sending a 0 power field (or the emulated power if that's set)
-      previous_notification_millis = current_millis;
-      writeIndoorBikeDataCharacteristic(emulated_power);
-    }
-    // updates the Zwift inclination history, and checks internally to avoid processing the same control point data twice
-    handleControlPoint();
+    cp_handled = handleControlPoint();
   }
 
+  // If we have been updated by Zwift, or in any event at least once a second:
+  // update the trainer with target resistance, get new trainer data and update zwift with it
+  if (cp_handled || (current_millis > previous_notification_millis + NOTIFICATION_INTERVAL))
+  {
+    previous_notification_millis = current_millis;
+    if (peripheral_connected)
+    {
+      // Update the trainer target resistance
+      writeTrainerTargetResistance();
+      // Fetch info from the trainer
+      readTrainerPowerAndCadence();
+    }
+    // send a notification to Zwift every NOTIFICATION_INTERVAL milliseconds, otherwise Zwift will show "no signal"
+    writeIndoorBikeDataCharacteristic(emulated_cadence, emulated_power); // replace emulated with real once that code is working
+  }
+
+  // Other behaviours dependent on the state we are in
   switch (sm_state)
   {
   case SM_STATE_ERROR:
@@ -147,41 +169,35 @@ void loop()
   }
   case SM_STATE_LEVELLING:
   {
-    // Update inclination while waiting for the user to level the bike
-    setLEDto(bt_connected ? WHITE : YELLOW);
-    if (digitalRead(D2) == HIGH)
+    // Move the bike up and down while one of the up/down buttons is pressed, otherwise stop
+    // TODO: the control loop isn't great, perhaps slow down the input from Zwift since control is binary
+    if (digitalRead(D3) == HIGH)
     {
-      // User has pressed the levelling button. Stop all motion, record the reference inclination and move on to the next state
-      moveStop(bt_connected ? WHITE : YELLOW);
-      reference_inclination_percent = getAverageInclinationPercent(); // set the reference inclination to the current inclination
-      sm_state = SM_STATE_RUNNING;
-      while (digitalRead(D2) == HIGH)
-      {
-        delay(100); // to debounce the D2 keypress, otherwise we'll end up right back in SM_STATE_LEVELLING
-      }
-      if (serial_debug && Serial)
-      {
-        Serial.print("User has levelled the bike, reference inclination is ");
-        Serial.print(reference_inclination_percent);
-        Serial.println("%");
-        Serial.println("Entering SM_STATE_RUNNING");
-      }
+      moveDown(GREEN);
+    }
+    else if (digitalRead(D4) == HIGH)
+    {
+      moveUp(RED);
     }
     else
     {
-      // Move the bike up and down while one of the up/down buttons is pressed, otherwise stop
-      // TODO: the control loop isn't great, perhaps slow down the input from Zwift since control is binary
-      if (digitalRead(D3) == HIGH)
+      moveStop(bt_connected ? WHITE : YELLOW);
+      if (digitalRead(D2) == HIGH)
       {
-        moveDown(GREEN);
-      }
-      else if (digitalRead(D4) == HIGH)
-      {
-        moveUp(RED);
-      }
-      else
-      {
-        moveStop(bt_connected ? WHITE : YELLOW);
+        // User has pressed the levelling button. Stop all motion, record the reference inclination and move on to the next state
+        while (digitalRead(D2) == HIGH)
+        {
+          delay(100); // to debounce the D2 keypress, otherwise we'll end up right back in SM_STATE_LEVELLING
+        }
+        reference_inclination_percent = getAverageInclinationPercent(); // set the reference inclination to the current inclination
+        sm_state = SM_STATE_RUNNING;
+        if (serial_debug && Serial)
+        {
+          Serial.print("User has levelled the bike, reference inclination is ");
+          Serial.print(reference_inclination_percent);
+          Serial.println("%");
+          Serial.println("Entering SM_STATE_RUNNING");
+        }
       }
     }
     break;
@@ -192,11 +208,11 @@ void loop()
     {
       // User has pressed the levelling button durring normal operation, return to levelling mode
       moveStop(bt_connected ? BLUE : AQUA);
-      sm_state = SM_STATE_LEVELLING;
       while (digitalRead(D2) == HIGH)
       {
         delay(100); // to debounce the D2 keypress, otherwise we'll end up right back in SM_STATE_RUNNING
       }
+      sm_state = SM_STATE_LEVELLING;
       if (serial_debug && Serial)
       {
         Serial.println("Entering SM_STATE_LEVELLING");
@@ -210,7 +226,7 @@ void loop()
       float latest_inc_diff = target_inclination_percent - (getLatestInclinationPercent() - reference_inclination_percent);
       motor_state_t motor_state = getMotorState();
       // By default, aim for a maximum difference to target of 1% and use the average (slower but more accurate) difference.
-      // If we haven't moved in a while, narrow the target difference to 0.5% and use the average (slower but more accurate) difference.
+      // If we haven't moved in a while, narrow the target difference to 0.5%
       // If the motor is already moving, use the default target difference but use the latest (faster but less accurate) difference.
       // Consider this all to be a very crude PID controller with the benefit of being very simple.
       float run_diff = 1.0;
@@ -225,9 +241,9 @@ void loop()
       }
       if (loop_debug && serial_debug && Serial)
       {
-        Serial.print("run_diff ");
+        Serial.print("run_diff=");
         Serial.print(run_diff);
-        Serial.print(" use_diff ");
+        Serial.print(", use_diff=");
         Serial.println(use_diff);
       }
       // Switch the motor direction according to the inputs set above
